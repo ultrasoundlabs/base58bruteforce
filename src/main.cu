@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 #include <limits>
+#include <algorithm>
 
 #include "sha256.cuh"
 
@@ -16,6 +17,11 @@ __constant__ uint8_t kBase58Lookup[128];
 
 constexpr uint8_t INVALID = 0xFF;
 constexpr int     BASE58_DECODED_LEN = 25;
+
+// Maximum number of matches we will keep. 1M entries ⇒ 8 MB of GPU memory.
+// With 2^32 trials and a 32-bit checksum, the expected number of hits is ~1,
+// but we reserve plenty of head-room just in case.
+constexpr unsigned int MAX_MATCHES = 1 << 20; // 1'048'576
 
 // The Bitcoin Base58 alphabet (note that 0, O, I, and l are omitted)
 static const uint8_t kBase58Alphabet[] =
@@ -113,20 +119,24 @@ __device__ bool decode_validate_mask(const char *input,
             final_digest[3] == payload[24]);
 }
 
-__global__ void kernel_find(const char *input,
-                            int          in_len,
-                            const int   *letter_idx,
-                            int          num_letters,
-                            uint64_t     total_masks,
-                            uint64_t    *out_mask) {
+__global__ void kernel_find_all(const char  *input,
+                                int          in_len,
+                                const int   *letter_idx,
+                                int          num_letters,
+                                uint64_t     total_masks,
+                                uint64_t    *matches,       // [MAX_MATCHES]
+                                unsigned int *match_count)  // single counter
+{
     const uint64_t stride = static_cast<uint64_t>(gridDim.x) * blockDim.x;
     uint64_t tid = blockDim.x * blockIdx.x + threadIdx.x;
 
-    const uint64_t SENTINEL = 0xFFFFFFFFFFFFFFFFULL;
-    while (tid < total_masks && *out_mask == SENTINEL) {
+    while (tid < total_masks) {
         if (decode_validate_mask(input, in_len, letter_idx, num_letters, tid)) {
-            atomicMin(out_mask, tid);
-            return;
+            // Reserve a slot for this match
+            unsigned int idx = atomicAdd(match_count, 1u);
+            if (idx < MAX_MATCHES) {
+                matches[idx] = tid;
+            }
         }
         tid += stride;
     }
@@ -181,7 +191,8 @@ int main(int argc, char **argv) {
     // Device allocations
     char    *d_input      = nullptr;
     int     *d_letter_idx = nullptr;
-    uint64_t *d_result    = nullptr;
+    uint64_t    *d_matches    = nullptr;
+    unsigned int *d_match_cnt = nullptr;
 
     CUDA_CHECK(cudaMalloc(&d_input, input.size()));
     CUDA_CHECK(cudaMemcpy(d_input, input.data(), input.size(), cudaMemcpyHostToDevice));
@@ -190,42 +201,51 @@ int main(int argc, char **argv) {
     CUDA_CHECK(cudaMemcpy(d_letter_idx, letter_idx.data(), letter_idx.size() * sizeof(int),
                           cudaMemcpyHostToDevice));
 
-    CUDA_CHECK(cudaMalloc(&d_result, sizeof(uint64_t)));
-    const uint64_t init_val = std::numeric_limits<uint64_t>::max();
-    CUDA_CHECK(cudaMemcpy(d_result, &init_val, sizeof(uint64_t), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMalloc(&d_matches, MAX_MATCHES * sizeof(uint64_t)));
+    CUDA_CHECK(cudaMalloc(&d_match_cnt, sizeof(unsigned int)));
+    CUDA_CHECK(cudaMemset(d_match_cnt, 0, sizeof(unsigned int)));
 
     init_lookup_table();
 
-    kernel_find<<<static_cast<uint32_t>(blocks), threads_per_block>>>(
+    kernel_find_all<<<static_cast<uint32_t>(blocks), threads_per_block>>>(
         d_input, static_cast<int>(input.size()), d_letter_idx, num_letters,
-        total_masks, d_result);
+        total_masks, d_matches, d_match_cnt);
     CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaDeviceSynchronize());
 
-    uint64_t found_mask;
-    CUDA_CHECK(cudaMemcpy(&found_mask, d_result, sizeof(uint64_t), cudaMemcpyDeviceToHost));
+    unsigned int host_match_cnt = 0;
+    CUDA_CHECK(cudaMemcpy(&host_match_cnt, d_match_cnt, sizeof(unsigned int), cudaMemcpyDeviceToHost));
+
+    std::vector<uint64_t> host_matches(host_match_cnt);
+    if (host_match_cnt > 0) {
+        CUDA_CHECK(cudaMemcpy(host_matches.data(), d_matches,
+                              host_match_cnt * sizeof(uint64_t),
+                              cudaMemcpyDeviceToHost));
+        std::sort(host_matches.begin(), host_matches.end());
+    }
 
     CUDA_CHECK(cudaFree(d_input));
     CUDA_CHECK(cudaFree(d_letter_idx));
-    CUDA_CHECK(cudaFree(d_result));
+    CUDA_CHECK(cudaFree(d_matches));
+    CUDA_CHECK(cudaFree(d_match_cnt));
 
-    if (found_mask == std::numeric_limits<uint64_t>::max()) {
+    if (host_match_cnt == 0) {
         fprintf(stderr, "No valid candidate found\n");
         return EXIT_FAILURE;
     }
 
-    // Reconstruct correct-cased string
-    std::string corrected = input;
-    int idx = 0;
-    for (size_t i = 0; i < corrected.size(); ++i) {
-        if (std::isalpha(static_cast<unsigned char>(corrected[i]))) {
-            const int bit = (found_mask >> idx) & 1ULL;
-            corrected[i] = bit ? static_cast<char>(std::toupper(corrected[i]))
-                                : static_cast<char>(std::tolower(corrected[i]));
-            ++idx;
+    for (uint64_t mask : host_matches) {
+        std::string corrected = input;
+        int idx = 0;
+        for (size_t i = 0; i < corrected.size(); ++i) {
+            if (std::isalpha(static_cast<unsigned char>(corrected[i]))) {
+                const int bit = (mask >> idx) & 1ULL;
+                corrected[i] = bit ? static_cast<char>(std::toupper(corrected[i]))
+                                    : static_cast<char>(std::tolower(corrected[i]));
+                ++idx;
+            }
         }
+        printf("%s\n", corrected.c_str());
     }
-
-    printf("%s\n", corrected.c_str());
     return EXIT_SUCCESS;
 } 
