@@ -53,9 +53,10 @@ __device__ bool decode_validate_mask(const char *input,
                                      const int   *letter_idx,
                                      int          num_letters,
                                      uint64_t     mask) {
-    // Buffer to hold Base58 bignum (reverse order) — 34 bytes is enough for 58^34
-    uint8_t num[34] = {0};
-    int     offset  = 33;               // index of first significant byte
+    constexpr int NUM_LIMBS = 9;
+    uint32_t limbs[NUM_LIMBS];
+#pragma unroll
+    for (int i = 0; i < NUM_LIMBS; ++i) limbs[i] = 0u;
 
     int letter_pos = 0;
 
@@ -75,30 +76,39 @@ __device__ bool decode_validate_mask(const char *input,
         const uint8_t digit = lookup_base58(byte);
         if (digit == INVALID) return false;
 
-        uint32_t carry = digit;
-        for (int j = 33; j >= offset; --j) {
-            uint32_t val = num[j] * 58u + carry;
-            num[j] = static_cast<uint8_t>(val & 0xFFu);
-            carry  = val >> 8u;
-        }
-        if (carry && offset) {
-            --offset;
-            num[offset] = static_cast<uint8_t>(carry);
+        // Multiply the 288-bit integer by 58 and add the new digit.
+        uint64_t carry = digit;
+#pragma unroll
+        for (int l = 0; l < NUM_LIMBS; ++l) {
+            uint64_t val = static_cast<uint64_t>(limbs[l]) * 58ULL + carry;
+            limbs[l] = static_cast<uint32_t>(val & 0xFFFFFFFFULL);
+            carry = val >> 32ULL;
         }
     }
 
-    // Skip leading zeros
-    while (offset < 33 && num[offset] == 0) ++offset;
+    uint8_t bytes[34];
+#pragma unroll
+    for (int l = 0; l < NUM_LIMBS; ++l) {
+        const uint32_t w = limbs[l];
+        bytes[l * 4 + 0] = static_cast<uint8_t>(w & 0xFFu);
+        bytes[l * 4 + 1] = static_cast<uint8_t>((w >> 8) & 0xFFu);
+        bytes[l * 4 + 2] = static_cast<uint8_t>((w >> 16) & 0xFFu);
+        bytes[l * 4 + 3] = static_cast<uint8_t>((w >> 24) & 0xFFu);
+    }
 
-    const int remaining = 34 - offset;
+    // Find the index of the first non-zero byte starting from MSB side
+    int offset = 33;
+    while (offset > 0 && bytes[offset] == 0) --offset;
+
+    const int remaining = offset + 1; // bytes 0..offset inclusive
     if (remaining != BASE58_DECODED_LEN) return false;
 
-    if (num[offset] != 0x41) return false;           // version byte check
+    if (bytes[offset] != 0x41) return false; // version byte check
 
     uint8_t payload[BASE58_DECODED_LEN];
 #pragma unroll
     for (int i = 0; i < BASE58_DECODED_LEN; ++i)
-        payload[i] = num[offset + i];
+        payload[i] = bytes[offset - i];
 
     CUDA_SHA256_CTX ctx;
 
