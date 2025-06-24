@@ -6,6 +6,7 @@
 #include <vector>
 #include <limits>
 #include <algorithm>
+#include <cstring>
 
 #include "sha256.cuh"
 
@@ -62,8 +63,9 @@ __device__ bool decode_validate_mask(int          in_len,
     for (int i = 0; i < in_len; ++i) {
         uint8_t byte = static_cast<uint8_t>(kInputString[i]);
 
-        // Apply case selected by mask
-        if ((byte >= 'A' && byte <= 'Z') || (byte >= 'a' && byte <= 'z')) {
+        bool is_alpha = ((byte >= 'A' && byte <= 'Z') || (byte >= 'a' && byte <= 'z'));
+        bool ambiguous = is_alpha && (lookup_base58(byte ^ 0x20) != INVALID);
+        if (ambiguous) {
             const int bit = static_cast<int>((mask >> letter_pos) & 1ULL);
             ++letter_pos;
             if (bit)
@@ -145,8 +147,14 @@ __global__ void kernel_find_all(int          in_len,
 // -----------------------------------------------------------------------------
 static std::vector<int> build_letter_index(const std::string &s) {
     std::vector<int> idx;
-    for (int i = 0; i < static_cast<int>(s.size()); ++i)
-        if (std::isalpha(static_cast<unsigned char>(s[i]))) idx.push_back(i);
+    for (int i = 0; i < static_cast<int>(s.size()); ++i) {
+        unsigned char uc = static_cast<unsigned char>(s[i]);
+        if (!std::isalpha(uc)) continue;
+        char toggled = static_cast<char>(uc ^ 0x20); // flip case bit
+        if (std::strchr(reinterpret_cast<const char*>(kBase58Alphabet), toggled)) {
+            idx.push_back(i);
+        }
+    }
     return idx;
 }
 
@@ -227,14 +235,12 @@ int main(int argc, char **argv) {
 
     for (uint64_t mask : host_matches) {
         std::string corrected = input;
-        int idx = 0;
-        for (size_t i = 0; i < corrected.size(); ++i) {
-            if (std::isalpha(static_cast<unsigned char>(corrected[i]))) {
-                const int bit = (mask >> idx) & 1ULL;
-                corrected[i] = bit ? static_cast<char>(std::toupper(corrected[i]))
-                                    : static_cast<char>(std::tolower(corrected[i]));
-                ++idx;
-            }
+        for (size_t j = 0; j < letter_idx.size(); ++j) {
+            const int pos = letter_idx[j];
+            const int bit = (mask >> j) & 1ULL;
+            char c = corrected[pos];
+            corrected[pos] = bit ? static_cast<char>(std::toupper(c))
+                                 : static_cast<char>(std::tolower(c));
         }
         printf("%s\n", corrected.c_str());
     }

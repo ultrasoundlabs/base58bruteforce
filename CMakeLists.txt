@@ -20,7 +20,7 @@ target_include_directories(base58bruteforce PRIVATE
 target_compile_features(base58bruteforce PRIVATE cxx_std_17)
 
 target_compile_options(base58bruteforce PRIVATE
-    $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math -lineinfo -Xptxas -O3>
+    $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math -lineinfo -Xptxas -O3 -maxrregcount=64>
     $<$<AND:$<NOT:$<COMPILE_LANGUAGE:CUDA>>,$<CXX_COMPILER_ID:GNU,Clang>>:-O3 -march=native>
 )
 
