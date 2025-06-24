@@ -6,7 +6,7 @@ set(CMAKE_CUDA_SEPARABLE_COMPILATION ON)
 set(CMAKE_CUDA_STANDARD 17)
 
 # ---------------- sources ----------------
-set(DEC_SRC src/main.cu)
+set(DEC_SRC src/main.cu src/sha256.cu)
 list(REMOVE_DUPLICATES DEC_SRC)
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${DEC_SRC})
 
@@ -31,7 +31,7 @@ elseif(UNIX AND NOT APPLE)
     target_link_libraries(base58bruteforce PRIVATE Threads::Threads)
 endif()
 
-install(TARGETS base58bruteforce DESTINATION bin)
+install(TARGETS base58bruteforce EXPORT base58bruteforceTargets DESTINATION bin)
 install(EXPORT base58bruteforceTargets
     FILE base58bruteforceTargets.cmake
     NAMESPACE base58bruteforce::
