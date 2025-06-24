@@ -27,6 +27,8 @@ constexpr unsigned int MAX_MATCHES = 1 << 20; // 1'048'576
 static const uint8_t kBase58Alphabet[] =
     "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
+__constant__ char kInputString[64];
+
 // -----------------------------------------------------------------------------
 // Error-checking helpers
 // -----------------------------------------------------------------------------
@@ -48,8 +50,7 @@ __device__ __forceinline__ uint8_t lookup_base58(uint8_t c) {
     return (c < 128) ? kBase58Lookup[c] : INVALID;
 }
 
-__device__ bool decode_validate_mask(const char *input,
-                                     int          in_len,
+__device__ bool decode_validate_mask(int          in_len,
                                      const int   *letter_idx,
                                      int          num_letters,
                                      uint64_t     mask) {
@@ -61,7 +62,7 @@ __device__ bool decode_validate_mask(const char *input,
     int letter_pos = 0;
 
     for (int i = 0; i < in_len; ++i) {
-        uint8_t byte = static_cast<uint8_t>(input[i]);
+        uint8_t byte = static_cast<uint8_t>(kInputString[i]);
 
         // Apply case selected by mask
         if ((byte >= 'A' && byte <= 'Z') || (byte >= 'a' && byte <= 'z')) {
@@ -129,8 +130,7 @@ __device__ bool decode_validate_mask(const char *input,
             final_digest[3] == payload[24]);
 }
 
-__global__ void kernel_find_all(const char  *input,
-                                int          in_len,
+__global__ void kernel_find_all(int          in_len,
                                 const int   *letter_idx,
                                 int          num_letters,
                                 uint64_t     total_masks,
@@ -141,7 +141,7 @@ __global__ void kernel_find_all(const char  *input,
     uint64_t tid = blockDim.x * blockIdx.x + threadIdx.x;
 
     while (tid < total_masks) {
-        if (decode_validate_mask(input, in_len, letter_idx, num_letters, tid)) {
+        if (decode_validate_mask(in_len, letter_idx, num_letters, tid)) {
             // Reserve a slot for this match
             unsigned int idx = atomicAdd(match_count, 1u);
             if (idx < MAX_MATCHES) {
@@ -199,13 +199,13 @@ int main(int argc, char **argv) {
     const uint64_t blocks = (std::min<uint64_t>(total_masks, (1ULL << 32))) / threads_per_block + 1;
 
     // Device allocations
-    char    *d_input      = nullptr;
     int     *d_letter_idx = nullptr;
     uint64_t    *d_matches    = nullptr;
     unsigned int *d_match_cnt = nullptr;
 
-    CUDA_CHECK(cudaMalloc(&d_input, input.size()));
-    CUDA_CHECK(cudaMemcpy(d_input, input.data(), input.size(), cudaMemcpyHostToDevice));
+    // Copy the input string into constant memory once; all threads will read
+    // it from the constant cache.
+    CUDA_CHECK(cudaMemcpyToSymbol(kInputString, input.data(), input.size(), 0, cudaMemcpyHostToDevice));
 
     CUDA_CHECK(cudaMalloc(&d_letter_idx, letter_idx.size() * sizeof(int)));
     CUDA_CHECK(cudaMemcpy(d_letter_idx, letter_idx.data(), letter_idx.size() * sizeof(int),
@@ -218,7 +218,7 @@ int main(int argc, char **argv) {
     init_lookup_table();
 
     kernel_find_all<<<static_cast<uint32_t>(blocks), threads_per_block>>>(
-        d_input, static_cast<int>(input.size()), d_letter_idx, num_letters,
+        static_cast<int>(input.size()), d_letter_idx, num_letters,
         total_masks, d_matches, d_match_cnt);
     CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaDeviceSynchronize());
@@ -234,7 +234,6 @@ int main(int argc, char **argv) {
         std::sort(host_matches.begin(), host_matches.end());
     }
 
-    CUDA_CHECK(cudaFree(d_input));
     CUDA_CHECK(cudaFree(d_letter_idx));
     CUDA_CHECK(cudaFree(d_matches));
     CUDA_CHECK(cudaFree(d_match_cnt));
