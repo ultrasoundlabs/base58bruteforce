@@ -111,23 +111,14 @@ __device__ bool decode_validate_mask(int          in_len,
     for (int i = 0; i < BASE58_DECODED_LEN; ++i)
         payload[i] = bytes[offset - i];
 
-    CUDA_SHA256_CTX ctx;
+    uint8_t digest[32];
+    double_sha256_21(payload, digest);
 
-    uint8_t first_digest[32];
-    cuda_sha256_init(&ctx);
-    cuda_sha256_update(&ctx, payload, 21);
-    cuda_sha256_final(&ctx, first_digest);
-
-    uint8_t final_digest[32];
-    cuda_sha256_init(&ctx);
-    cuda_sha256_update(&ctx, first_digest, 32);
-    cuda_sha256_final(&ctx, final_digest);
-
-    // Compare the first 4 bytes of final_digest to the checksum in the payload
-    return (final_digest[0] == payload[21] &&
-            final_digest[1] == payload[22] &&
-            final_digest[2] == payload[23] &&
-            final_digest[3] == payload[24]);
+    // Compare the first 4 bytes of the resulting digest to the checksum in the payload
+    return (digest[0] == payload[21] &&
+            digest[1] == payload[22] &&
+            digest[2] == payload[23] &&
+            digest[3] == payload[24]);
 }
 
 __global__ void kernel_find_all(int          in_len,

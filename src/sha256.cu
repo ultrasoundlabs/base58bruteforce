@@ -211,3 +211,115 @@ void mcm_cuda_sha256_hash_batch(BYTE* in, WORD inlen, BYTE* out, WORD n_batch)
 	cudaFree(cuda_indata);
 	cudaFree(cuda_outdata);
 }
+
+// -----------------------------------------------------------------------------
+// Specialised 21-byte double-SHA256 for the base-58 brute-forcer
+// -----------------------------------------------------------------------------
+__device__ void double_sha256_21(const uint8_t payload[21], uint8_t digest[32]) {
+    // Working variables
+    uint32_t a,b,c,d,e,f,g,h;
+    uint32_t W[16];
+
+    auto init_state = [&]() {
+        a = 0x6a09e667u; b = 0xbb67ae85u; c = 0x3c6ef372u; d = 0xa54ff53au;
+        e = 0x510e527fu; f = 0x9b05688cu; g = 0x1f83d9abu; h = 0x5be0cd19u;
+    };
+
+    // -------------------------------------------------------------------------
+    // Hash #1 : 21-byte message (the version byte + 20-byte hash)
+    // -------------------------------------------------------------------------
+
+    // Build first 16 message words (big-endian packing)
+#pragma unroll
+    for (int i = 0; i < 5; ++i) {
+        W[i] = (static_cast<uint32_t>(payload[i*4+0]) << 24) |
+               (static_cast<uint32_t>(payload[i*4+1]) << 16) |
+               (static_cast<uint32_t>(payload[i*4+2]) <<  8) |
+               (static_cast<uint32_t>(payload[i*4+3]));
+    }
+    // Word 5 holds byte 20 followed by padding 0x80 .. 0x00
+    W[5] = (static_cast<uint32_t>(payload[20]) << 24) | 0x00800000u;
+
+    // Words 6-13 are zero, 14 is zero, 15 is bit-length (21 * 8 = 168)
+    W[6] = W[7] = W[8] = W[9] = W[10] = W[11] = W[12] = W[13] = 0u;
+    W[14] = 0u;
+    W[15] = 168u;
+
+    init_state();
+
+#pragma unroll
+    for (int t = 0; t < 64; ++t) {
+        uint32_t w;
+        if (t < 16) {
+            w = W[t];
+        } else {
+            uint32_t s0 = ROTRIGHT(W[(t-15)&15],7) ^ ROTRIGHT(W[(t-15)&15],18) ^ (W[(t-15)&15] >> 3);
+            uint32_t s1 = ROTRIGHT(W[(t-2)&15],17) ^ ROTRIGHT(W[(t-2)&15],19) ^ (W[(t-2)&15] >> 10);
+            w = W[t & 15] += s1 + W[(t-7)&15] + s0;
+        }
+        uint32_t T1 = h + EP1(e) + CH(e,f,g) + k[t] + w;
+        uint32_t T2 = EP0(a) + MAJ(a,b,c);
+        h = g; g = f; f = e; e = d + T1;
+        d = c; c = b; b = a; a = T1 + T2;
+    }
+
+    uint32_t H[8];
+    H[0] = a + 0x6a09e667u;
+    H[1] = b + 0xbb67ae85u;
+    H[2] = c + 0x3c6ef372u;
+    H[3] = d + 0xa54ff53au;
+    H[4] = e + 0x510e527fu;
+    H[5] = f + 0x9b05688cu;
+    H[6] = g + 0x1f83d9abu;
+    H[7] = h + 0x5be0cd19u;
+
+    // -------------------------------------------------------------------------
+    // Hash #2 : 32-byte digest of previous hash
+    // -------------------------------------------------------------------------
+    // First eight words are H[0..7] (already in host endianness)
+#pragma unroll
+    for (int i = 0; i < 8; ++i) {
+        W[i] = H[i];
+    }
+    // Padding
+    W[8] = 0x80000000u;
+    W[9] = W[10] = W[11] = W[12] = W[13] = 0u;
+    W[14] = 0u;
+    W[15] = 256u; // 32 bytes * 8 bits
+
+    init_state();
+
+#pragma unroll
+    for (int t = 0; t < 64; ++t) {
+        uint32_t w;
+        if (t < 16) {
+            w = W[t];
+        } else {
+            uint32_t s0 = ROTRIGHT(W[(t-15)&15],7) ^ ROTRIGHT(W[(t-15)&15],18) ^ (W[(t-15)&15] >> 3);
+            uint32_t s1 = ROTRIGHT(W[(t-2)&15],17) ^ ROTRIGHT(W[(t-2)&15],19) ^ (W[(t-2)&15] >> 10);
+            w = W[t & 15] += s1 + W[(t-7)&15] + s0;
+        }
+        uint32_t T1 = h + EP1(e) + CH(e,f,g) + k[t] + w;
+        uint32_t T2 = EP0(a) + MAJ(a,b,c);
+        h = g; g = f; f = e; e = d + T1;
+        d = c; c = b; b = a; a = T1 + T2;
+    }
+
+    H[0] = a + 0x6a09e667u;
+    H[1] = b + 0xbb67ae85u;
+    H[2] = c + 0x3c6ef372u;
+    H[3] = d + 0xa54ff53au;
+    H[4] = e + 0x510e527fu;
+    H[5] = f + 0x9b05688cu;
+    H[6] = g + 0x1f83d9abu;
+    H[7] = h + 0x5be0cd19u;
+
+    // Write out digest in big-endian order
+#pragma unroll
+    for (int i = 0; i < 8; ++i) {
+        digest[i*4 + 0] = static_cast<uint8_t>((H[i] >> 24) & 0xffu);
+        digest[i*4 + 1] = static_cast<uint8_t>((H[i] >> 16) & 0xffu);
+        digest[i*4 + 2] = static_cast<uint8_t>((H[i] >>  8) & 0xffu);
+        digest[i*4 + 3] = static_cast<uint8_t>( H[i]        & 0xffu);
+    }
+}

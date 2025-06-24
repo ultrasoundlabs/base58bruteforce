@@ -39,3 +39,6 @@ __device__ void cuda_sha256_final(CUDA_SHA256_CTX *ctx, BYTE hash[]);
 
 // Host-side convenience wrapper (already implemented in sha256.cu)
 void mcm_cuda_sha256_hash_batch(BYTE *in, WORD inlen, BYTE *out, WORD n_batch);
+
+// Forward declaration for the specialised, fixed-length double-SHA256 used in main.cu
+__device__ void double_sha256_21(const uint8_t payload[21], uint8_t digest[32]);
