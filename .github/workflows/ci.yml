@@ -30,7 +30,7 @@ jobs:
       if: startsWith(matrix.os, 'ubuntu')
       uses: Jimver/cuda-toolkit@v0.2.25
       with:
-        cuda: '12.9.1'
+        cuda: '12.9.0'
 
     # ------------------------ Build on Linux -------------------------
     - name: Run build.sh (Linux)
