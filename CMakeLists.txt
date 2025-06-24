@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.18)
-project(base58bruteforce VERSION 0.1 LANGUAGES CUDA)
+project(base58bruteforce VERSION 0.1 LANGUAGES CXX CUDA)
 
 set(CMAKE_CUDA_ARCHITECTURES 75 80 86 89 90)
 set(CMAKE_CUDA_SEPARABLE_COMPILATION ON)
