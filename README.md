@@ -47,12 +47,12 @@ Tron addresses are always 34-character Base58Check strings because the raw form 
 
 $$
 \boxed{
-\;n=\left\lceil\frac{25 \cdot 8 - 1}{\log_{2}58}\right\rceil
+n=\left\lceil\frac{25 \cdot 8 - 1}{\log_{2}58}\right\rceil
 = \left\lceil\frac{199}{\log_{2}58}\right\rceil
-= 34\;
+= 34
 }
 \quad\Longrightarrow\quad
-58^{34} > 2^{199}\;
+58^{34} > 2^{199}
 $$
 
 Because the first byte is always 0x41 ("T"), a Tron address can contain at most 33 ambiguous characters. For the worst case, each of those 33 characters must be a letter other than `o`, `i`, or `L`; none of those three have case variants in Base58. Brute-forcing such an address would entail $2^{33} \times 2 \approx 16 \text{billion}$ SHA-256 computations. In practice, typical Tron addresses contain only 22-26 ambiguous letters, so the brute-force cost falls to roughly 8-132 million SHA-256 hashes.
@@ -65,8 +65,8 @@ The more possible variations an invalid-case Tron address has, the higher the ch
 
 $$
 \boxed{%
-\Pr[\text{collision}\mid m] \;=\;
-1 - \bigl(1-2^{-40}\bigr)^{\,2^{m}-1}
+\Pr[\text{collision}\mid m] =
+1 - \bigl(1-2^{-40}\bigr)^{2^{m}-1}
 }
 $$
 
@@ -79,7 +79,7 @@ Where:
 In the worst case (33 ambiguous characters in an invalid-case address) this gives us an...
 
 $$
-1-\bigl(1-2^{-40}\bigr)^{2^{33}-1}\;\approx\;0.0078
+1-\bigl(1-2^{-40}\bigr)^{2^{33}-1}\approx0.0078
 $$
 
 ...**~0.78%** chance to get more than one valid Tron address. In normal Tron addresses, this is several orders of magnitude lower, but you don't really want to rely on this when sending a million dollars to the brute-forced address. So, if you integrate this somewhere, your internal logic should handle such situations.
