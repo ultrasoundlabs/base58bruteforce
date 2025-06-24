@@ -31,6 +31,8 @@ jobs:
       uses: Jimver/cuda-toolkit@v0.2.25
       with:
         cuda: '12.9.0'
+        linux-local-args: '["--toolkit"]'
+        log-file-suffix: '${{ matrix.os }}.txt'
 
     # ------------------------ Build on Linux -------------------------
     - name: Run build.sh (Linux)
